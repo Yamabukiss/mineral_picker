@@ -37,12 +37,15 @@ public:
 
     int morph_type_;
     int morph_iterations_;
-    int lower_hsv_h_;
-    int lower_hsv_s_;
-    int lower_hsv_v_;
-    int upper_hsv_h_;
-    int upper_hsv_s_;
-    int upper_hsv_v_;
+//    int lower_hsv_h_;
+//    int lower_hsv_s_;
+//    int lower_hsv_v_;
+//    int upper_hsv_h_;
+//    int upper_hsv_s_;
+//    int upper_hsv_v_;
+    int binary_;
+    int x_grad_;
+    int y_grad_;
     cv::Mat K_;
     double min_area_thresh_;
 };
