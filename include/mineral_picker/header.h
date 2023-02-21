@@ -14,7 +14,10 @@
 #include "mutex"
 #include "future"
 #include "chrono"
-#include <ctime>
+#include "ctime"
+#include "tf/tf.h"
+#include "tf/transform_broadcaster.h"
+
 class Picker
 {
 public:
@@ -23,8 +26,9 @@ public:
     void dynamicCallback(mineral_picker::dynamicConfig& config);
     void featureTracker();
     void imgProcess();
-//    void pose_estimation_2d2d();
-
+    cv::Point2f pixel2cam(const cv::Point2f &p);
+    void pose_estimation_2d2d();
+    void triangulation(const cv::Mat &R,const cv::Mat &t);
 
     ros::NodeHandle nh_;
     cv_bridge::CvImagePtr cv_image_;
@@ -32,6 +36,7 @@ public:
     ros::Publisher binary_publisher_;
     ros::Publisher prev_publisher_;
     ros::Publisher cur_publisher_;
+    ros::Publisher camera_pose_publisher_;
     dynamic_reconfigure::Server<mineral_picker::dynamicConfig> server_;
     dynamic_reconfigure::Server<mineral_picker::dynamicConfig>::CallbackType callback_;
 
@@ -45,6 +50,7 @@ public:
     int upper_hsv_v_;
     int min_features_;
     int min_matches_;
+    cv::Mat K_;
     double min_area_thresh_;
     bool initial_;
     cv::Mat prev_img_;

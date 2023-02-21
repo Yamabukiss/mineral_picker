@@ -1,24 +1,17 @@
 #include "mineral_picker/header.h"
 
-std::queue<std::vector<cv::DMatch>> g_matches_buff;
-std::queue<std::vector<cv::KeyPoint>> g_prev_keypoints_buff;
-std::queue<std::vector<cv::KeyPoint>> g_cur_keypoints_buff;
-//std::queue<cv::Mat> g_R_buff;
-//std::queue<cv::Mat> g_t_buff;
-//std::queue<std::vector<cv::Point2f>> g_points_vec_buff;
-std::mutex mutex_buff;
-
-int g_thread_num=0;
-
 void Picker::onInit()
 {
-    img_subscriber_= nh_.subscribe("/image_rect", 1, &Picker::receiveFromCam,this);
+    img_subscriber_= nh_.subscribe("/hk_camera/image_raw", 1, &Picker::receiveFromCam,this);
     binary_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_binary_publisher", 1);
     prev_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_prev_publisher", 1);
     cur_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_cur_publisher", 1);
+    camera_pose_publisher_ = nh_.advertise<geometry_msgs::TwistStamped>("camera_pose_publisher", 1);
+
     callback_ = boost::bind(&Picker::dynamicCallback, this, _1);
     server_.setCallback(callback_);
     initial_= true;
+    K_ = (cv::Mat_<float>(3, 3) << 3556.40883, 0, 752.97577, 0, 3555.52262, 580.95345, 0, 0, 1);
 }
 
 void Picker::dynamicCallback(mineral_picker::dynamicConfig &config)
@@ -47,8 +40,6 @@ void Picker::receiveFromCam(const sensor_msgs::ImageConstPtr& image)
 void Picker::featureTracker()
 {
 
-    time_t start,end;
-    start=clock();
     std::vector<cv::Point2f> corners_vec;
     auto orb=cv::ORB::create(min_features_);
     auto matcher = cv::DescriptorMatcher::create("BruteForce-Hamming");
@@ -79,153 +70,121 @@ void Picker::featureTracker()
                 matches_.push_back(matches_vec[i]);
             }
         }
-        end=clock();
-        std::cout<<"orb time: "<<(end-start)/1000<<" ms"<<std::endl;
         if (matches_.size()>=min_matches_)
         {
-            mutex_buff.lock();
-            if (g_matches_buff.size()>=5)
-            {
-                std::cout<<"queue larger than 5,pop now"<<std::endl;
-                g_prev_keypoints_buff.pop();
-                g_cur_keypoints_buff.pop();
-                g_matches_buff.pop();
-
-                g_prev_keypoints_buff.push(prev_keypoint_vec_);
-                g_cur_keypoints_buff.push(cur_keypoint_vec_);
-                g_matches_buff.push(matches_);
-                std::cout<<"buff restructure finish"<<std::endl;
-            }
-            else
-            {
-                g_prev_keypoints_buff.push(prev_keypoint_vec_);
-                g_cur_keypoints_buff.push(cur_keypoint_vec_);
-                g_matches_buff.push(matches_);
-                std::cout<<"queue size now:"<<g_matches_buff.size()<<std::endl;
-            }
-            mutex_buff.unlock();
+            pose_estimation_2d2d();
         }
         else std::cout<<"too few matching points"<<std::endl;
+
     }
+
     else std::cout<<"track fail,there is not enough feature points in current frame"<<std::endl;
 }
 
-//cv::Point2f pixel2cam(const cv::Point2f &p, const cv::Mat &K)
-//{
-//    return {(p.x - K.at<float>(0, 2)) / K.at<float>(0, 0),(p.y - K.at<float>(1, 2)) / K.at<float>(1, 1)};
-//}
-
-
-//void Picker::pose_estimation_2d2d()
-//{
-//
-//    cv::Mat R,t;
-//    //相机内参矩阵
-////    cv::Mat K=(cv::Mat_<double>(3,3)<<520.9,0,325.1,0,521,0,249.7,0,0,1);
-//
-//    //把匹配点转换为vector<point2f>的形式
-//    std::vector<cv::Point2f> points1;
-//    std::vector<cv::Point2f> points2;
-//
-//    for(int i=0;i<(int)matches_.size();i++)
-//    {
-//        points1.push_back(prev_keypoint_vec_[matches_[i].queryIdx].pt);
-//        points2.push_back(cur_keypoint_vec_[matches_[i].queryIdx].pt);
-//    }
-//
-//    //计算基础矩阵F
-////    cv::Mat fundamental_matrix;
-////    fundamental_matrix=cv::findFundamentalMat(points1,points2,cv::FM_8POINT);
-////    std::cout << "FUNDAMENTAL_MATRIX" <<std::endl<<fundamental_matrix<<std::endl;
-//
-//    //计算本质矩阵
-//    cv::Point2d principal_point(325.1,249.7);//相机光心 标定值
-//    double focal_lengh=521 ;//相机焦距
-//    cv::Mat essential_matrix;
-//    essential_matrix=cv::findEssentialMat(points1,points2,focal_lengh,principal_point);
-////    std::cout<<"essential_matrix is"<<std::endl<<essential_matrix<<std::endl;
-//
-//    //计算单应性矩阵
-//    //本列非平面
-////    cv::Mat homography_matrix;
-////    homography_matrix=cv::findHomography(points1,points2,cv::RANSAC,3);
-////    std::cout<<"homography_matrix is"<<std::endl<<homography_matrix<<std::endl;
-//
-//    //从本质矩阵恢复旋转，平移
-//    cv::recoverPose(essential_matrix,points1,points2,R,t,focal_lengh,principal_point);
-//    std::cout<<"R :"<<R<<std::endl;
-//    std::cout<<"t is"<<t<<std::endl;
-//
-//}
-
-void pose_estimation_2d2d()
+cv::Point2f Picker::pixel2cam(const cv::Point2f &p)
 {
-    g_thread_num++;
+    return {(p.x - K_.at<float>(0, 2)) / K_.at<float>(0, 0),(p.y - K_.at<float>(1, 2)) / K_.at<float>(1, 1)};
+}
 
-    if (!g_matches_buff.empty())
-    {
-        std::cout<<"pose estimation now"<<std::endl;
-        time_t start,end;
-        start=clock();
-        cv::Mat R,t;
-        //相机内参矩阵
+void Picker::triangulation(const cv::Mat &R, const cv::Mat &t)
+{
+    cv::Mat T1 = (cv::Mat_<float>(3, 4) <<
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0);
+    cv::Mat T2 = (cv::Mat_<float>(3, 4) <<
+            R.at<double>(0, 0), R.at<double>(0, 1), R.at<double>(0, 2), t.at<double>(0, 0),
+            R.at<double>(1, 0), R.at<double>(1, 1), R.at<double>(1, 2), t.at<double>(1, 0),
+            R.at<double>(2, 0), R.at<double>(2, 1), R.at<double>(2, 2), t.at<double>(2, 0));
+    std::vector<cv::Point2f> pts_1, pts_2;
+    for (auto m:matches_) {
+        pts_1.push_back(pixel2cam(prev_keypoint_vec_[m.queryIdx].pt));
+        pts_2.push_back(pixel2cam(cur_keypoint_vec_[m.trainIdx].pt));
+    }
+
+    cv::Mat pts_4d;
+    cv::triangulatePoints(T1, T2, pts_1, pts_2, pts_4d);
+    std::vector<cv::Point3d> points_3d;
+    for (int i = 0; i < pts_4d.cols; i++) {
+        cv::Mat x = pts_4d.col(i);
+        cv::Point3d p(
+                x.at<float>(0, 0),
+                x.at<float>(1, 0),
+                x.at<float>(2, 0)
+        );
+        points_3d.push_back(p);
+    }
+}
+
+
+
+void Picker::pose_estimation_2d2d()
+{
+
+    cv::Mat R,t;
+    //相机内参矩阵
 //    cv::Mat K=(cv::Mat_<double>(3,3)<<520.9,0,325.1,0,521,0,249.7,0,0,1);
 
-        //把匹配点转换为vector<point2f>的形式
-        std::vector<cv::Point2f> points1;
-        std::vector<cv::Point2f> points2;
-        mutex_buff.lock();
-        auto matches=g_matches_buff.front();
-        g_matches_buff.pop();
+    //把匹配点转换为vector<point2f>的形式
+    std::vector<cv::Point2f> points1;
+    std::vector<cv::Point2f> points2;
 
-        auto prev_keypoint_vec=g_prev_keypoints_buff.front();
-        g_prev_keypoints_buff.pop();
-        auto cur_keypoint_vec=g_cur_keypoints_buff.front();
-        g_cur_keypoints_buff.pop();
+    for(int i=0;i<(int)matches_.size();i++)
+    {
+        points1.push_back(prev_keypoint_vec_[matches_[i].queryIdx].pt);
+        points2.push_back(cur_keypoint_vec_[matches_[i].queryIdx].pt);
+    }
 
-        mutex_buff.unlock();
-
-        for(int i=0;i<(int)matches.size();i++)
-        {
-            points1.push_back(prev_keypoint_vec[matches[i].queryIdx].pt);
-            points2.push_back(cur_keypoint_vec[matches[i].queryIdx].pt);
-        }
-
-        //计算基础矩阵F
+    //计算基础矩阵F
 //    cv::Mat fundamental_matrix;
 //    fundamental_matrix=cv::findFundamentalMat(points1,points2,cv::FM_8POINT);
 //    std::cout << "FUNDAMENTAL_MATRIX" <<std::endl<<fundamental_matrix<<std::endl;
 
-        //计算本质矩阵
-        cv::Point2d principal_point(325.1,249.7);//相机光心 标定值
-        double focal_lengh=521 ;//相机焦距
-        cv::Mat essential_matrix;
-        essential_matrix=cv::findEssentialMat(points1,points2,focal_lengh,principal_point);
+    //计算本质矩阵
+    cv::Point2d principal_point(753,581);//相机光心 标定值
+    double focal_lengh=3556 ;//相机焦距
+    cv::Mat essential_matrix;
+    essential_matrix=cv::findEssentialMat(points1,points2,focal_lengh,principal_point);
 //    std::cout<<"essential_matrix is"<<std::endl<<essential_matrix<<std::endl;
 
-        //计算单应性矩阵
-        //本列非平面
+    //计算单应性矩阵
+    //本列非平面
 //    cv::Mat homography_matrix;
 //    homography_matrix=cv::findHomography(points1,points2,cv::RANSAC,3);
 //    std::cout<<"homography_matrix is"<<std::endl<<homography_matrix<<std::endl;
 
-        //从本质矩阵恢复旋转，平移
-        cv::recoverPose(essential_matrix,points1,points2,R,t,focal_lengh,principal_point);
-        std::cout<<"R :"<<R<<std::endl;
-        std::cout<<"t is"<<t<<std::endl;
-        end=clock();
-        std::cout<<"estimation time: "<<(end-start)/1000<<" ms"<<std::endl;
+    //从本质矩阵恢复旋转，平移
+    cv::recoverPose(essential_matrix,points1,points2,R,t,focal_lengh,principal_point);
+    std::cout<<"R :"<<R<<std::endl;
+    std::cout<<"t is"<<t<<std::endl;
+    tf::Matrix3x3 tf_rotate_matrix(R.at<double>(0, 0), R.at<double>(0, 1), R.at<double>(0, 2),
+                                   R.at<double>(1, 0), R.at<double>(1, 1), R.at<double>(1, 2),
+                                   R.at<double>(2, 0), R.at<double>(2, 1), R.at<double>(2, 2));
+    tf::Vector3 tf_tvec(t.at<double>(0,0), t.at<double>(0,1), t.at<double>(0,2));
 
-        
 
-//        mutex_buff.lock();
-//        g_R_buff.push(R);
-//        g_t_buff.push(t);
-//        mutex_buff.unlock();
+//    triangulation(R,t);
+    tf::Quaternion quaternion;
+    double r;
+    double p;
+    double y;
+    static geometry_msgs::TwistStamped  test;
 
-    }
-//    if (g_asyc_status!=std::future_status::ready) g_asyc_status=std::future_status::ready;
-    g_thread_num--;
+    test.twist.linear.x=t.at<double>(0,0);
+    test.twist.linear.y=t.at<double>(0,1);
+    test.twist.linear.z=t.at<double>(0,2);
+    tf_rotate_matrix.getRPY(r, p, y);
+    quaternion.setRPY(y, p, r);
+    test.twist.angular.x=r;
+    test.twist.angular.y=p;
+    test.twist.angular.z=y;
+    camera_pose_publisher_.publish(test);
+    tf::Transform transform;
+    transform.setRotation(quaternion);
+    transform.setOrigin(tf_tvec);
+    tf::StampedTransform stamped_Transfor(transform, ros::Time::now(), "camera_optional_frame","camera");
+    static tf::TransformBroadcaster broadcaster;
+    broadcaster.sendTransform(stamped_Transfor);
 }
 
 
@@ -243,7 +202,6 @@ void Picker::imgProcess()
     std::vector< std::vector< cv::Point> > contours;
     std::vector< std::vector< cv::Point> > mask_contours;
     cv::findContours(mor_img,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
-    std::vector<cv::Point2f> mineral_points_vec;
     for (int i = 0; i < contours.size(); i++)
     {
         std::vector<cv::Point2i> hull;
@@ -256,7 +214,6 @@ void Picker::imgProcess()
             int cx = int(moment.m10 / moment.m00);
             int cy = int(moment.m01 / moment.m00);
             cv::Point2i middle_point(cx, cy);
-            mineral_points_vec.push_back(middle_point);
             cv::polylines(cur_img_, hull, true, cv::Scalar(0, 199, 140), 7);
             cv::circle(cur_img_, middle_point, 3, cv::Scalar(0, 199, 140), 7);
         }
@@ -290,14 +247,6 @@ int main(int argc, char **argv) {
     while (ros::ok())
     {
         ros::spinOnce();
-
-        if (g_thread_num<g_matches_buff.size())
-        {
-            std::thread (pose_estimation_2d2d).detach();
-            std::cout<<g_thread_num<<std::endl;
-            std::chrono::milliseconds dura(1);
-            std::this_thread::sleep_for(dura);
-        }
     }
 
 }

@@ -7,6 +7,7 @@ find_package(catkin REQUIRED COMPONENTS
         nodelet
         pluginlib
         dynamic_reconfigure
+        tf
         )
 
 find_package(OpenCV REQUIRED)
