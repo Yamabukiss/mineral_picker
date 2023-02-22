@@ -29,7 +29,6 @@ void Picker::dynamicCallback(mineral_picker::dynamicConfig &config)
     upper_hsv_v_=config.upper_hsv_v;
     morph_size_=config.morph_size;
     app_epsilon_=config.app_epsilon;
-    angle_bias_=config.angle_bias;
     length_bias_=config.length_bias;
 }
 
@@ -55,16 +54,6 @@ void Picker::claheProcess(cv::Mat * &hist_ptr)
 bool Picker::selectPoints(const std::vector<cv::Point2f> &centroid_vec,std::vector<cv::Point2f> &plane_points)
 {
     auto distance_lam = [](const cv::Point2f &p1,const cv::Point2f &p2){return sqrt(pow(p1.x-p2.x,2) + pow(p1.y-p2.y,2));};
-//    auto angle_lam = [](const cv::Point2f &p1,const cv::Point2f &p2,const cv::Point2f &p3,int angle_bias)
-//            {
-//                double dx1 = (p2.x - p1.x);
-//                double dy1 = (p2.y - p1.y);
-//                double dx2 = (p3.x - p1.x);
-//                double dy2 = (p3.y - p1.y);
-//                double angle_line = (dx1*dx2 + dy1 * dy2) / sqrt((dx1*dx1 + dy1 * dy1)*(dx2*dx2 + dy2 * dy2) + 1e-10);
-//                double a = acos(angle_line) * 180 / 3.141592653;
-//                return a>=90-angle_bias && a<=90+angle_bias;
-//            };
     std::vector<std::pair<std::pair<cv::Point2f,cv::Point2f>,float>> points_distance_vec;
     for (int i=0;i<centroid_vec.size()-1;i++)
     {
@@ -75,8 +64,6 @@ bool Picker::selectPoints(const std::vector<cv::Point2f> &centroid_vec,std::vect
         }
         std::sort(points_distance_vec.begin(),points_distance_vec.end(),
                   [&](std::pair<std::pair<cv::Point2f,cv::Point2f>,float> &a,std::pair<std::pair<cv::Point2f,cv::Point2f>,float> &b){return a.second < b.second;});
-//        if (int(points_distance_vec[1].second-points_distance_vec[0].second)<=length_bias_ &&
-//        angle_lam(points_distance_vec[0].first.first,points_distance_vec[0].first.second,points_distance_vec[1].first.second,angle_bias_))
         if (int(points_distance_vec[1].second-points_distance_vec[0].second)<=length_bias_)
         {
             plane_points.emplace_back(points_distance_vec[0].first.first);

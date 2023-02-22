@@ -52,6 +52,5 @@ public:
     double min_area_thresh_;
     double max_area_thresh_;
     double app_epsilon_;
-    int angle_bias_;
     int length_bias_;
 };
