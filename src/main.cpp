@@ -4,23 +4,42 @@ void Picker::onInit()
 {
     img_subscriber_= nh_.subscribe("/hk_camera/image_raw", 1, &Picker::receiveFromCam,this);
 //    img_subscriber_= nh_.subscribe("/image_rect", 1, &Picker::receiveFromCam,this);
-    binary_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_binary_publisher", 1);
+    hsv_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_hsv_publisher", 1);
+    masked_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_masked_publisher", 1);
     segmentation_publisher_ = nh_.advertise<sensor_msgs::Image>("segmentation_publisher", 1);
-    histed_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_histed_publisher", 1);
     camera_pose_publisher_ = nh_.advertise<geometry_msgs::TwistStamped>("camera_pose_publisher", 1);
 
     callback_ = boost::bind(&Picker::dynamicCallback, this, _1);
     server_.setCallback(callback_);
     K_ = (cv::Mat_<float>(3, 3) << 3556.40883, 0, 752.97577, 0, 3555.52262, 580.95345, 0, 0, 1);
+    cv::Mat temp_triangle_=cv::imread("/home/yamabuki/detect_ws/src/mineral_picker/temp_triangle.png",cv::IMREAD_GRAYSCALE);
+    cv::Mat temp_rectangle_=cv::imread("/home/yamabuki/detect_ws/src/mineral_picker/temp_rectangle.png",cv::IMREAD_GRAYSCALE);
+
+    cv::Mat binary_1,binary_2;
+
+    cv::threshold(temp_triangle_,binary_1,0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
+    cv::threshold(temp_rectangle_,binary_2,0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
+
+    std::vector<std::vector<cv::Point>> rect_temp_contour;
+    std::vector<std::vector<cv::Point>> tri_temp_contour;
+    std::vector<cv::Point> rect_hull;
+    std::vector<cv::Point> tri_hull;
+
+    cv::findContours(binary_1,tri_temp_contour,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
+    cv::convexHull(tri_temp_contour[0],tri_hull, true);
+    temp_triangle_hull_=tri_hull;
+
+    cv::findContours(binary_2,rect_temp_contour,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
+    std::sort(rect_temp_contour.begin(),rect_temp_contour.end(),[](const std::vector<cv::Point>& contour1,const std::vector<cv::Point>& contour2){return contour1.size()>contour2.size();});
+    cv::convexHull(rect_temp_contour[0],rect_hull, true);
+    temp_rectangle_hull_=rect_hull;
+    std::cout<<"temp init finished"<<std::endl;
 }
 
 void Picker::dynamicCallback(mineral_picker::dynamicConfig &config)
 {
-    clip_limit_ = config.clip_limit;
     morph_type_ = config.morph_type;
     morph_iterations_ = config.morph_iterations;
-    min_area_thresh_=config.min_area_thresh;
-    max_area_thresh_=config.max_area_thresh;
     lower_hsv_h_=config.lower_hsv_h;
     lower_hsv_s_=config.lower_hsv_s;
     lower_hsv_v_=config.lower_hsv_v;
@@ -28,8 +47,9 @@ void Picker::dynamicCallback(mineral_picker::dynamicConfig &config)
     upper_hsv_s_=config.upper_hsv_s;
     upper_hsv_v_=config.upper_hsv_v;
     morph_size_=config.morph_size;
-    app_epsilon_=config.app_epsilon;
-    length_bias_=config.length_bias;
+    save_on_=config.save_on;
+    moment_bias_=config.moment_bias;
+    approx_epsilon_=config.approx_epsilon;
 }
 
 
@@ -38,113 +58,83 @@ void Picker::receiveFromCam(const sensor_msgs::ImageConstPtr& image)
     cv_image_ = boost::make_shared<cv_bridge::CvImage>(*cv_bridge::toCvShare(image, image->encoding));
     imgProcess();
     segmentation_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),cv_image_->encoding , cv_image_->image).toImageMsg());
+//    getTemplateImg();
 }
 
-void Picker::claheProcess(cv::Mat * &hist_ptr)
+void Picker::getTemplateImg()
 {
-    std::vector<cv::Mat> bgr_vec;
-    cv::split(cv_image_->image,bgr_vec);
-    auto clahe=cv::createCLAHE(clip_limit_);
-    clahe->apply(bgr_vec[0],bgr_vec[0]);
-    clahe->apply(bgr_vec[1],bgr_vec[1]);
-    clahe->apply(bgr_vec[2],bgr_vec[2]);
-    cv::merge(bgr_vec,*hist_ptr);
-}
-
-bool Picker::selectPoints(const std::vector<cv::Point2f> &centroid_vec,std::vector<cv::Point2f> &plane_points)
-{
-    auto distance_lam = [](const cv::Point2f &p1,const cv::Point2f &p2){return sqrt(pow(p1.x-p2.x,2) + pow(p1.y-p2.y,2));};
-    std::vector<std::pair<std::pair<cv::Point2f,cv::Point2f>,float>> points_distance_vec;
-    for (int i=0;i<centroid_vec.size()-1;i++)
+        cv::Mat gray_img;
+        cv::cvtColor(cv_image_->image,gray_img,CV_BGR2GRAY);
+        segmentation_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),"mono8" , gray_img).toImageMsg());
+    if (save_on_)
     {
-        for (int j=i+1;j<centroid_vec.size();j++)
-        {
-            double distance=distance_lam(centroid_vec[i],centroid_vec[j]);
-            points_distance_vec.emplace_back(std::make_pair(std::make_pair(centroid_vec[i],centroid_vec[j]),distance));
-        }
-        std::sort(points_distance_vec.begin(),points_distance_vec.end(),
-                  [&](std::pair<std::pair<cv::Point2f,cv::Point2f>,float> &a,std::pair<std::pair<cv::Point2f,cv::Point2f>,float> &b){return a.second < b.second;});
-        if (int(points_distance_vec[1].second-points_distance_vec[0].second)<=length_bias_)
-        {
-            plane_points.emplace_back(points_distance_vec[0].first.first);
-            plane_points.emplace_back(points_distance_vec[0].first.second);
-            plane_points.emplace_back(points_distance_vec[1].first.second);
-
-            cv::circle(cv_image_->image, points_distance_vec[0].first.first, 8, cv::Scalar(255, 255, 0), 4);
-            cv::circle(cv_image_->image, points_distance_vec[0].first.second, 8, cv::Scalar(255, 255, 0), 4);
-            cv::circle(cv_image_->image, points_distance_vec[1].first.second, 8, cv::Scalar(255, 255, 0), 4);
-            break;
-        }
+        cv::imwrite("/home/yamabuki/detect_ws/src/mineral_picker/temp_img.jpg",gray_img);
     }
 }
 
 void Picker::imgProcess()
 {
     //segementation
-    cv::Mat mor_img;
-    auto * hist_ptr=new cv::Mat ();
+    auto * mor_ptr=new cv::Mat();
     auto * hsv_ptr=new cv::Mat();
     auto * binary_ptr=new cv::Mat();
-    claheProcess(hist_ptr);
-    cv::cvtColor(*hist_ptr,*hsv_ptr,cv::COLOR_BGR2HSV);
-    histed_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),cv_image_->encoding , *hist_ptr).toImageMsg());
-    delete hist_ptr;
+    auto * mask_ptr=new cv::Mat();
+    cv::cvtColor(cv_image_->image,*hsv_ptr,cv::COLOR_BGR2HSV);
     cv::inRange(*hsv_ptr,cv::Scalar(lower_hsv_h_,lower_hsv_s_,lower_hsv_v_),cv::Scalar(upper_hsv_h_,upper_hsv_s_,upper_hsv_v_),*binary_ptr);
     delete hsv_ptr;
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(1+2*morph_size_, 1+2*morph_size_), cv::Point(-1, -1));
-    cv::morphologyEx(*binary_ptr,mor_img,morph_type_,kernel,cv::Point(-1,-1),morph_iterations_);
+    cv::morphologyEx(*binary_ptr,*mor_ptr,morph_type_,kernel,cv::Point(-1,-1),morph_iterations_);
     delete binary_ptr;
-    binary_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),"mono8" , mor_img).toImageMsg());
+    hsv_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),"mono8" , *mor_ptr).toImageMsg());
 
-    //contours process
-    std::vector< std::vector< cv::Point> > contours;
-    cv::findContours(mor_img,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
-    std::vector<cv::Point2f> centroid_vec;
-    for (int i = 0; i < contours.size(); i++)
+    // hsv contours process
+    auto * contours_ptr = new std::vector< std::vector< cv::Point> >();
+    cv::findContours(*mor_ptr,*contours_ptr,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
+    auto * blank_mask_ptr= new cv::Mat();
+    *blank_mask_ptr=cv::Mat::zeros(cv_image_->image.rows,cv_image_->image.cols,CV_8UC1);
+    for (auto &contours : *contours_ptr)
     {
         std::vector<cv::Point2i> hull;
-        cv::convexHull(contours[i], hull, true);
-        if (cv::contourArea(hull) >= min_area_thresh_ && cv::contourArea(hull) <= max_area_thresh_)
+        cv::convexHull(contours, hull, true);
+        cv::fillConvexPoly(*blank_mask_ptr,hull,cv::Scalar(255));
+    }
+    delete contours_ptr;
+
+    cv::bitwise_xor(*mor_ptr,*blank_mask_ptr,*mask_ptr);
+    masked_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),"mono8" , *mask_ptr).toImageMsg());
+    delete mor_ptr;
+    delete blank_mask_ptr;
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(*mask_ptr,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
+    delete mask_ptr;
+    for (auto &contour : contours)
+    {
+        std::vector<cv::Point2i> hull;
+        cv::convexHull(contour, hull, true);
+        auto moment = cv::moments(hull);
+        double hu_moment[7];
+        cv::HuMoments(moment, hu_moment);
+        if (cv::matchShapes(hull,temp_triangle_hull_,cv::CONTOURS_MATCH_I2,0)<=moment_bias_ || cv::matchShapes(hull,temp_rectangle_hull_,cv::CONTOURS_MATCH_I2,0)<=moment_bias_)
         {
-            // rotate rectangule blue
-//            auto rotate_rect = cv::minAreaRect(hull);
-//            auto* touchVertices = new cv::Point2f[4];
-//            rotate_rect.points(touchVertices);
-//            for (int j = 0; j < 4; ++j)
-//            {
-//                cv::line(cv_image_->image, touchVertices[j % 4], touchVertices[(j + 1) % 4], cv::Scalar(255,0,0), 2);
-//            }
-            std::vector<cv::Point2f> app_points_vec;
-            cv::approxPolyDP(hull,app_points_vec,app_epsilon_,true);
-
-            if (app_points_vec.size() == 3 || app_points_vec.size() == 4) // approx poly points should be 3 or 4
+            std::vector<cv::Point2i> approx_points;
+            cv::approxPolyDP(hull,approx_points, approx_epsilon_,true);
+            if (approx_points.size()==3 || approx_points.size()==4)
             {
-                // approx shape points red
 
-                for (auto &point : app_points_vec)
-                {
-                    cv::circle(cv_image_->image,point,8,cv::Scalar(0,0,255),2);
-                }
-
-                auto moment = cv::moments(hull);
-                double hu_moment[7];
-                cv::HuMoments(moment, hu_moment);
+                for (auto &applox_point : approx_points) cv::circle(cv_image_->image,applox_point,8,cv::Scalar(0,0,255),3);
                 int cx = int(moment.m10 / moment.m00);
                 int cy = int(moment.m01 / moment.m00);
                 cv::Point2f centroid(cx, cy);
-                centroid_vec.emplace_back(centroid);
 
                 // centroid and polylines green
                 cv::polylines(cv_image_->image, hull, true, cv::Scalar(0, 255, 0), 2);
-//                cv::circle(cv_image_->image, middle_point, 2, cv::Scalar(0, 255, 0), 2);
+                cv::circle(cv_image_->image, centroid, 2, cv::Scalar(0, 255, 0), 2);
             }
-            else continue;
         }
+
     }
-    // now select the plane 4 points
-    std::vector<cv::Point2f> plane_points;
-    if (!centroid_vec.empty()) selectPoints(centroid_vec,plane_points);
-    else std::cout<<"can not detect target"<<std::endl;
+
 }
 
 

@@ -25,16 +25,14 @@ public:
     void receiveFromCam(const sensor_msgs::ImageConstPtr &image);
     void dynamicCallback(mineral_picker::dynamicConfig& config);
     void imgProcess();
-    void claheProcess(cv::Mat * &hist_ptr) ;
-    bool selectPoints(const std::vector<cv::Point2f> &centroid_vec,std::vector<cv::Point2f> &plane_points);
-
+    void getTemplateImg();
     ros::NodeHandle nh_;
     cv_bridge::CvImagePtr cv_image_;
     ros::Subscriber img_subscriber_;
-    ros::Publisher binary_publisher_;
+    ros::Publisher hsv_publisher_;
+    ros::Publisher masked_publisher_;
     ros::Publisher segmentation_publisher_;
     ros::Publisher camera_pose_publisher_;
-    ros::Publisher histed_publisher_;
     dynamic_reconfigure::Server<mineral_picker::dynamicConfig> server_;
     dynamic_reconfigure::Server<mineral_picker::dynamicConfig>::CallbackType callback_;
 
@@ -47,10 +45,10 @@ public:
     int upper_hsv_h_;
     int upper_hsv_s_;
     int upper_hsv_v_;
+    int approx_epsilon_;
     cv::Mat K_;
-    double clip_limit_;
-    double min_area_thresh_;
-    double max_area_thresh_;
-    double app_epsilon_;
-    int length_bias_;
+    std::vector<cv::Point> temp_rectangle_hull_;
+    std::vector<cv::Point> temp_triangle_hull_;
+    bool save_on_;
+    double moment_bias_;
 };
