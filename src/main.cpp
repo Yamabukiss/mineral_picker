@@ -72,6 +72,13 @@ void Picker::getTemplateImg()
     }
 }
 
+void Picker::sortPoints(std::vector<cv::Point2f> &centriod_points_vec)
+{
+    std::sort(centriod_points_vec.begin(),centriod_points_vec.end(),[](const cv::Point2f &p1,const cv::Point2f &p2){return p1.x<p2.x;});
+    std::sort(centriod_points_vec.begin(),centriod_points_vec.end(),[](const cv::Point2f &p1,const cv::Point2f &p2){return p1.y<p2.y;});
+    // lt
+}
+
 void Picker::imgProcess()
 {
     //segementation
@@ -108,6 +115,7 @@ void Picker::imgProcess()
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(*mask_ptr,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
     delete mask_ptr;
+    std::vector<cv::Point2f> centriod_points_vec;
     for (auto &contour : contours)
     {
         std::vector<cv::Point2i> hull;
@@ -126,7 +134,7 @@ void Picker::imgProcess()
                 int cx = int(moment.m10 / moment.m00);
                 int cy = int(moment.m01 / moment.m00);
                 cv::Point2f centroid(cx, cy);
-
+                centriod_points_vec.emplace_back(centroid);
                 // centroid and polylines green
                 cv::polylines(cv_image_->image, hull, true, cv::Scalar(0, 255, 0), 2);
                 cv::circle(cv_image_->image, centroid, 2, cv::Scalar(0, 255, 0), 2);
@@ -134,6 +142,9 @@ void Picker::imgProcess()
         }
 
     }
+
+    if (centriod_points_vec.size()<3) std::cout<<"features less than 3,detect fail"<<std::endl;
+
 
 }
 

@@ -26,6 +26,7 @@ public:
     void dynamicCallback(mineral_picker::dynamicConfig& config);
     void imgProcess();
     void getTemplateImg();
+    void sortPoints(std::vector<cv::Point2f> &centriod_points_vec);
     ros::NodeHandle nh_;
     cv_bridge::CvImagePtr cv_image_;
     ros::Subscriber img_subscriber_;
