@@ -73,13 +73,9 @@ void Picker::getTemplateImg()
     }
 }
 
-void Picker::sortPoints(std::vector<cv::Point2f> &centriod_points_vec)
+void Picker::sortPoints(std::vector<cv::Point2f> &centriod_vec)
 {
-    std::sort(centriod_points_vec.begin(),centriod_points_vec.end(),[](const cv::Point2f &p1,const cv::Point2f &p2){return p1.x<p2.x;});
-    std::sort(centriod_points_vec.begin(),centriod_points_vec.end(),[](const cv::Point2f &p1,const cv::Point2f &p2){return p1.y<p2.y;});
-    // lt
 }
-
 void Picker::imgProcess()
 {
     //segementation
@@ -133,6 +129,7 @@ void Picker::imgProcess()
     cv::findContours(*mask_ptr,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
     delete mask_ptr;
 
+    std::vector<cv::Point2f> centroid_vec;
     for (auto &contour : contours)
     {
         std::vector<cv::Point2i> hull;
@@ -146,16 +143,17 @@ void Picker::imgProcess()
             cv::approxPolyDP(hull,approx_points, approx_epsilon_,true);
             if (approx_points.size()==3 || approx_points.size()==4)
             {
-                cv::Point2f center;
-                float radius;
-                cv::minEnclosingCircle(hull,center,radius);
-                cv::circle(cv_image_->image,center,radius,cv::Scalar(0,255,255),3);
-                cv::circle(cv_image_->image,center,10,cv::Scalar(0,255,255),3);
+//                cv::Point2f center;
+//                float radius;
+//                cv::minEnclosingCircle(hull,center,radius);
+//                cv::circle(cv_image_->image,center,radius,cv::Scalar(0,255,255),3);
+//                cv::circle(cv_image_->image,center,10,cv::Scalar(0,255,255),3);
                 for (auto &applox_point : approx_points) cv::circle(cv_image_->image,applox_point,8,cv::Scalar(0,0,255),3);
                 //centriod
                 int cx = int(moment.m10 / moment.m00);
                 int cy = int(moment.m01 / moment.m00);
                 cv::Point2f centroid(cx, cy);
+                centroid_vec.push_back(centroid);
                 // centroid and polylines green
                 cv::polylines(cv_image_->image, hull, true, cv::Scalar(0, 255, 0), 2);
                 cv::circle(cv_image_->image, centroid, 2, cv::Scalar(0, 255, 0), 2);
