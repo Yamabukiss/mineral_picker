@@ -128,7 +128,10 @@ void Picker::imgProcess()
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(*mask_ptr,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
     delete mask_ptr;
-
+/* TODO 1、find the way to match the pnp points (you can get solid and across corner triangle by distance)
+        2、3 points situration have not got ideas
+        3、2 solids situration can be solve by theirs (2 solids) location
+ */
     std::vector<cv::Point2f> centroid_vec;
     for (auto &contour : contours)
     {
