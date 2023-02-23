@@ -5,20 +5,21 @@ void Picker::onInit()
     img_subscriber_= nh_.subscribe("/hk_camera/image_raw", 1, &Picker::receiveFromCam,this);
 //    img_subscriber_= nh_.subscribe("/image_rect", 1, &Picker::receiveFromCam,this);
     hsv_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_hsv_publisher", 1);
+    mask_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_mask_publisher", 1);
     masked_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_masked_publisher", 1);
-    segmentation_publisher_ = nh_.advertise<sensor_msgs::Image>("segmentation_publisher", 1);
+    segmentation_publisher_ = nh_.advertise<sensor_msgs::Image>("picker_segmentation_publisher", 1);
     camera_pose_publisher_ = nh_.advertise<geometry_msgs::TwistStamped>("camera_pose_publisher", 1);
 
     callback_ = boost::bind(&Picker::dynamicCallback, this, _1);
     server_.setCallback(callback_);
     K_ = (cv::Mat_<float>(3, 3) << 3556.40883, 0, 752.97577, 0, 3555.52262, 580.95345, 0, 0, 1);
-    cv::Mat temp_triangle_=cv::imread("/home/yamabuki/detect_ws/src/mineral_picker/temp_triangle.png",cv::IMREAD_GRAYSCALE);
-    cv::Mat temp_rectangle_=cv::imread("/home/yamabuki/detect_ws/src/mineral_picker/temp_rectangle.png",cv::IMREAD_GRAYSCALE);
+    cv::Mat temp_triangle=cv::imread("/home/yamabuki/detect_ws/src/mineral_picker/temp_triangle.png",cv::IMREAD_GRAYSCALE);
+    cv::Mat temp_rectangle=cv::imread("/home/yamabuki/detect_ws/src/mineral_picker/temp_rectangle.png",cv::IMREAD_GRAYSCALE);
 
     cv::Mat binary_1,binary_2;
 
-    cv::threshold(temp_triangle_,binary_1,0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
-    cv::threshold(temp_rectangle_,binary_2,0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
+    cv::threshold(temp_triangle,binary_1,0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
+    cv::threshold(temp_rectangle,binary_2,0, 255, cv::THRESH_BINARY_INV + cv::THRESH_OTSU);
 
     std::vector<std::vector<cv::Point>> rect_temp_contour;
     std::vector<std::vector<cv::Point>> tri_temp_contour;
@@ -99,15 +100,31 @@ void Picker::imgProcess()
     cv::findContours(*mor_ptr,*contours_ptr,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
     auto * blank_mask_ptr= new cv::Mat();
     *blank_mask_ptr=cv::Mat::zeros(cv_image_->image.rows,cv_image_->image.cols,CV_8UC1);
+    auto * hull_vec_ptr = new std::vector<std::vector<cv::Point2i>> ();
+
     for (auto &contours : *contours_ptr)
     {
         std::vector<cv::Point2i> hull;
         cv::convexHull(contours, hull, true);
-        cv::fillConvexPoly(*blank_mask_ptr,hull,cv::Scalar(255));
+        hull_vec_ptr->emplace_back(hull);
     }
-    delete contours_ptr;
 
-    cv::bitwise_xor(*mor_ptr,*blank_mask_ptr,*mask_ptr);
+    std::sort(hull_vec_ptr->begin(),hull_vec_ptr->end(),[](const std::vector<cv::Point2i> &hull1,const std::vector<cv::Point2i> &hull2){return cv::contourArea(hull1) > cv::contourArea(hull2);});
+
+    if (hull_vec_ptr->empty())
+    {
+        std::cout<<"can not find mineral in this frame"<<std::endl;
+        return;
+    }
+
+    auto max_area_hull=hull_vec_ptr[0][0];
+    delete  hull_vec_ptr;
+    delete contours_ptr;
+    cv::fillConvexPoly(*blank_mask_ptr,max_area_hull,cv::Scalar(255));
+
+    cv::bitwise_and(*mor_ptr,*blank_mask_ptr,*mask_ptr);
+    mask_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),"mono8" , *mask_ptr).toImageMsg());
+    cv::bitwise_xor(*blank_mask_ptr,*mask_ptr,*mask_ptr);
     masked_publisher_.publish(cv_bridge::CvImage(std_msgs::Header(),"mono8" , *mask_ptr).toImageMsg());
     delete mor_ptr;
     delete blank_mask_ptr;
@@ -115,7 +132,7 @@ void Picker::imgProcess()
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(*mask_ptr,contours,cv::RETR_EXTERNAL,CV_CHAIN_APPROX_SIMPLE);
     delete mask_ptr;
-    std::vector<cv::Point2f> centriod_points_vec;
+
     for (auto &contour : contours)
     {
         std::vector<cv::Point2i> hull;
@@ -129,12 +146,16 @@ void Picker::imgProcess()
             cv::approxPolyDP(hull,approx_points, approx_epsilon_,true);
             if (approx_points.size()==3 || approx_points.size()==4)
             {
-
+                cv::Point2f center;
+                float radius;
+                cv::minEnclosingCircle(hull,center,radius);
+                cv::circle(cv_image_->image,center,radius,cv::Scalar(0,255,255),3);
+                cv::circle(cv_image_->image,center,10,cv::Scalar(0,255,255),3);
                 for (auto &applox_point : approx_points) cv::circle(cv_image_->image,applox_point,8,cv::Scalar(0,0,255),3);
+                //centriod
                 int cx = int(moment.m10 / moment.m00);
                 int cy = int(moment.m01 / moment.m00);
                 cv::Point2f centroid(cx, cy);
-                centriod_points_vec.emplace_back(centroid);
                 // centroid and polylines green
                 cv::polylines(cv_image_->image, hull, true, cv::Scalar(0, 255, 0), 2);
                 cv::circle(cv_image_->image, centroid, 2, cv::Scalar(0, 255, 0), 2);
@@ -142,9 +163,6 @@ void Picker::imgProcess()
         }
 
     }
-
-    if (centriod_points_vec.size()<3) std::cout<<"features less than 3,detect fail"<<std::endl;
-
 
 }
 

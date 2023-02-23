@@ -31,6 +31,7 @@ public:
     cv_bridge::CvImagePtr cv_image_;
     ros::Subscriber img_subscriber_;
     ros::Publisher hsv_publisher_;
+    ros::Publisher mask_publisher_;
     ros::Publisher masked_publisher_;
     ros::Publisher segmentation_publisher_;
     ros::Publisher camera_pose_publisher_;
