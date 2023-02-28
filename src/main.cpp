@@ -138,8 +138,6 @@ void Picker::imgProcess()
         std::vector<cv::Point2i> hull;
         cv::convexHull(contour, hull, true);
         auto moment = cv::moments(hull);
-        double hu_moment[7];
-        cv::HuMoments(moment, hu_moment);
         if (cv::matchShapes(hull,temp_triangle_hull_,cv::CONTOURS_MATCH_I2,0)<=moment_bias_ || cv::matchShapes(hull,temp_rectangle_hull_,cv::CONTOURS_MATCH_I2,0)<=moment_bias_)
         {
             std::vector<cv::Point2i> approx_points;
